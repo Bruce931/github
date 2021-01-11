@@ -1,0 +1,202 @@
+//audio fingerprint
+//https://www.google.com/search?q=audio+fingerprint&oq=audio+fingerprint
+
+const webdriver = require('selenium-webdriver');
+const By = webdriver.By;
+const cheerio = require('cheerio');
+const chrome = require('selenium-webdriver/chrome');
+const fs = require('fs');
+const path = require('path');
+const read = require('recursive-readdir');
+const rp = require('request-promise');
+const until = webdriver.until;
+
+// handle reject promise
+process.on('unhandledRejection', (reason) => {
+    console.log('REJECTION', reason);
+});
+
+// trick entry...you can change it by urself
+const url = "https://xxxxx";
+const baseurl = 'https://xxxxx';
+
+// trying to use speech recognition ... but...the result is awful...
+// location where the songs you want to find
+const dir = '/path/to/your/audio';
+// filter array used by recursive-readdir
+const filters = ["*.rm", "*.jpg", "*.txt", "*.db", "*.JPG", "*.wma", "*.lrc"];
+
+// load chrome extensions needed function
+function encode(file) {
+    const stream = require('fs').readFileSync(file);
+    return new Buffer(stream).toString('base64');
+}
+
+const driver = new webdriver.Builder()
+    //   .usingServer('http://localhost:4444/wd/hub')
+    .withCapabilities(webdriver.Capabilities.chrome())
+    .setChromeOptions(
+        (new chrome.Options())
+        .addExtensions(encode('extentions.crx'))
+    )
+    .build();
+
+var currentpath, currentfile, searchstr,
+    cnt = 0,
+    total = 0,
+    hrefs = [],
+    founded,
+    files;
+// TODO: for more info when finished the task
+// infos = [],
+// no_srts = [],
+// no_infos = [],
+
+// get all files to files array
+function getAllFiles() {
+    read(dir, filters).then((data) => {
+            files = data;
+        },
+        function (error) {
+            console.error("something exploded", error);
+        }
+    );
+}
+// seprate the sync and async to flattern the complexity
+getAllFiles();
+
+driver.get(url).then(async () => {
+    for (const element of files) {
+        await handleSearchStep1(element);
+    }
+});
+
+// TODO: add promises chain
+const promises = [];
+
+const handleSearchStep1 = async (element) => {
+    try {
+        currentfile = element;
+        var author = "",
+            useAuthorSpan = false;
+        // TODO: Add multitab to do many tasks at the same time
+        // currentHandle = driver.getWindowHandle();
+        currentpath = path.dirname(element);
+        searchstr = path.basename(element, '.mp3');
+        searchstr = searchstr.replace(/[\d+\s+`~!@#$%^&*()_|+\-=÷¿?;:'",.<>\{\}\[\]\\\/]/g, '');
+        // empty hrefs array
+        hrefs = [];
+        if (searchstr) {
+            // searchby song name radio button
+            await driver.findElement(By.xpath('xpath put here')).click();
+            // song name input text, clear it first.
+            await driver.findElement(By.name('keyword')).clear()
+            await driver.findElement(By.name('keyword')).sendKeys(searchstr);
+            // search button
+            await driver.findElement(By.xpath('xpath put here')).click();
+
+            // find result
+            //FIXME: me : wait for specific element on the page to make sure pages loaded
+            // await driver.wait(until. (By.name('searchtop')));
+            const title = driver.getTitle();
+            if (title.match('not found on the site')) {
+                writeresult();
+            } else {
+                await driver.getTitle().then((data) => {
+
+                    total = +data.split("共有")[1].split("筆")[0];
+                    console.log(searchstr + " - counts: - " + total);
+                    cnt = 0;
+                    driver.getPageSource().then((data) => {
+                        const $ = cheerio.load(data);
+                        // check author from path
+                        // TIPS: 專輯資料夾必須是 演唱者-專輯名稱 不能有其他特殊字元 才會使用下面去判斷 網站找出的歌手名和資料夾抓取的是否相同
+                        author = path.dirname(element).split(path.sep).pop().replace(/[\d+\s+`~!@#$%^&*()_|+=÷¿?;:'",.<>\{\}\[\]\\\/]/g, '')
+                        if (author.match('-')) {
+                            useAuthorSpan = true;
+                            author = path.dirname(element).split(path.sep).pop().replace(/[\d+\s+`~!@#$%^&*()_|+=÷¿?;:'",.<>\{\}\[\]\\\/]/g, '').split('-')[0];
+                        }
+                        // mutation flag to check if founded the lrc or not
+                        founded = false;
+                        while (total - cnt > 0) {
+                            if (useAuthorSpan) {
+                                var spanAuthor = $(".css selector put here")[cnt].childNodes[0].data.replace(/[\d+\s+`~!@#$%^&*()_|+\-=÷¿?;:'",.<>\{\}\[\]\\\/]/g, '');
+                                if (spanAuthor == author) {
+                                    hrefs.push($(".css selector put here")[cnt].attribs.href);
+                                }
+                            } else {
+                                hrefs.push($(".css selector put here")[cnt].attribs.href);
+                            }
+                            cnt++;
+                        }
+
+                        cnt = 1;
+                        for (const val of hrefs) {
+                            var str = baseurl + val;
+                            if (!founded) {
+                                rp(str, (e, r, b) => {
+                                    console.log("trying number " + cnt + " from " + val);
+                                    getsrt(b);
+                                    cnt++;
+                                });
+                            }
+                        }
+                        if (cnt == total && founded == false) {
+                            // cant find anything from the site
+                            writeresult();
+                            no_srts.push(v);
+                        }
+                    });
+                });
+            }
+        }
+    } catch (err) {
+        console.log(err)
+    }
+}
+
+// TODO: refactor partial
+// Promise.all(promises).then((v) => {
+//     console.log(v);
+// }).catch((e) => {
+//     console.log(e);
+// })
+
+
+function getsrt(b) {
+    if (!founded) {
+        var result, Regex1, Regex2, resp, matched;
+        const $ = cheerio.load(b, {
+            decodeEntities: false
+        });
+
+        resp = $('.css selector put here').html();
+        // console.log(resp);
+        // match [xxx]xxx<
+        Regex1 = /(\[.*\].*?<)/gi;
+        matched = resp.match(Regex1);
+        if (matched) {
+            matched = resp.match(Regex1)[0].slice(0, -1);
+            Regex2 = /<br\s*[\/]?>/gi;
+            result = matched.split(Regex2);
+            console.log("result found");
+            writeresult(result);
+        } else {
+            // found the songs but no lrc file
+            console.log("no result found");
+        }
+    }
+}
+
+// FIXME: find error when output to the file it's not the currentfile.
+function writeresult(srt) {
+    const filepath = currentfile.slice(0, -4);
+    if (srt) {
+        fs.writeFileSync(filepath + ".lrc", srt.join('\n'));
+        founded = true;
+        infos.push(currentfile)
+    } else {
+        // found the songs but no lrc file
+        fs.writeFileSync(filepath + "_songFounded.lrc", "");
+    }
+}
